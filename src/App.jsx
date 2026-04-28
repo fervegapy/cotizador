@@ -17,15 +17,16 @@ const EMPTY_FORM = {
   quantity: "",
   weight: "",
   lossPercent: "",
+  retailPrice: "",
   airUSA: "",
   airPY: "",
   seaUSA: "",
   seaPY: "",
 }
 
-function calcMetrics(p, mode) {
+function calcMetrics(p, mode, qtyOverride) {
   const price = parseFloat(p.wholesalePrice) || 0
-  const qty = parseFloat(p.quantity) || 0
+  const qty = qtyOverride !== undefined ? qtyOverride : (parseFloat(p.quantity) || 0)
   const loss = parseFloat(p.lossPercent) || 0
 
   const shUSA = mode === "air" ? (parseFloat(p.airUSA) || 0) : (parseFloat(p.seaUSA) || 0)
@@ -40,6 +41,14 @@ function calcMetrics(p, mode) {
   const lossImpact = (qty - effectiveUnits) * price
 
   return { productCost, totalShipping, totalInvested, effectiveUnits, costPerUnit, shippingShare, lossImpact }
+}
+
+function calcMargin(costPerUnit, retailPrice) {
+  const sell = parseFloat(retailPrice) || 0
+  if (sell <= 0 || costPerUnit <= 0) return null
+  const marginPerUnit = sell - costPerUnit
+  const marginPct = (marginPerUnit / sell) * 100
+  return { sell, marginPerUnit, marginPct }
 }
 
 function hasMode(p, mode) {
@@ -87,7 +96,6 @@ function ProductForm({ initial = EMPTY_FORM, onSave, onCancel }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Producto */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2 space-y-1.5">
           <Label htmlFor="name">Nombre del producto *</Label>
@@ -103,7 +111,6 @@ function ProductForm({ initial = EMPTY_FORM, onSave, onCancel }) {
         </div>
       </div>
 
-      {/* Costos base */}
       <div className="border-t pt-4">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Producto</p>
         <div className="grid grid-cols-2 gap-4">
@@ -123,13 +130,15 @@ function ProductForm({ initial = EMPTY_FORM, onSave, onCancel }) {
             <Label htmlFor="lossPercent">% Merma / Regalos / Dev.</Label>
             <Input id="lossPercent" type="number" min="0" max="100" step="0.1" placeholder="0" value={form.lossPercent} onChange={set("lossPercent")} />
           </div>
+          <div className="sm:col-span-2 space-y-1.5">
+            <Label htmlFor="retailPrice">Precio de venta al público (USD/u)</Label>
+            <Input id="retailPrice" type="number" min="0" step="0.01" placeholder="Opcional — para calcular márgenes" value={form.retailPrice} onChange={set("retailPrice")} />
+          </div>
         </div>
       </div>
 
-      {/* Envíos */}
       <div className="border-t pt-4 space-y-4">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Envíos (completá los que apliquen)</p>
-
         <ShippingSection
           title="Aéreo"
           icon={<Plane className="h-3.5 w-3.5 text-sky-500" />}
@@ -140,7 +149,6 @@ function ProductForm({ initial = EMPTY_FORM, onSave, onCancel }) {
           form={form}
           set={set}
         />
-
         <ShippingSection
           title="Marítimo"
           icon={<Ship className="h-3.5 w-3.5 text-blue-700" />}
@@ -163,18 +171,19 @@ function ProductForm({ initial = EMPTY_FORM, onSave, onCancel }) {
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
-function InsightRow({ label, value, highlight, warn }) {
+function InsightRow({ label, value, highlight, warn, good }) {
   return (
     <div className="flex justify-between items-center">
       <span className={`text-sm ${highlight ? "font-medium text-foreground" : "text-muted-foreground"}`}>{label}</span>
-      <span className={`text-sm font-semibold ${highlight ? "text-foreground" : warn ? "text-amber-600" : "text-muted-foreground"}`}>{value}</span>
+      <span className={`text-sm font-semibold ${good ? "text-green-700" : highlight ? "text-foreground" : warn ? "text-amber-600" : "text-muted-foreground"}`}>{value}</span>
     </div>
   )
 }
 
-function ShippingInsights({ product, mode, bestCpu }) {
-  const m = calcMetrics(product, mode)
+function ShippingInsights({ product, mode, bestCpu, qty }) {
+  const m = calcMetrics(product, mode, qty)
   const isBest = bestCpu !== null && m.costPerUnit > 0 && m.costPerUnit === bestCpu
+  const margin = calcMargin(m.costPerUnit, product.retailPrice)
   const Icon = mode === "air" ? Plane : Ship
   const label = mode === "air" ? "Aéreo" : "Marítimo"
   const color = mode === "air" ? "text-sky-600" : "text-blue-800"
@@ -190,19 +199,37 @@ function ShippingInsights({ product, mode, bestCpu }) {
         {isBest && <Badge variant="success" className="text-xs gap-1 py-0"><Award className="h-3 w-3" />Mejor opción</Badge>}
       </div>
       <InsightRow label="Total invertido" value={`$${fmt(m.totalInvested)}`} highlight />
-      <InsightRow label="Costo por unidad efectiva" value={`$${fmt(m.costPerUnit)}`} highlight />
-      <InsightRow label="% Envío sobre inversión" value={`${fmt(m.shippingShare, 1)}%`} warn={m.shippingShare > 40} />
+      <InsightRow label="Costo/u efectiva" value={`$${fmt(m.costPerUnit)}`} highlight />
+      <InsightRow label="% Envío" value={`${fmt(m.shippingShare, 1)}%`} warn={m.shippingShare > 40} />
+
+      {margin && (
+        <>
+          <div className="border-t border-current/10 my-1" />
+          <InsightRow label="Margen/u" value={`$${fmt(margin.marginPerUnit)}`} good={margin.marginPerUnit > 0} warn={margin.marginPerUnit <= 0} />
+          <InsightRow label="Margen %" value={`${fmt(margin.marginPct, 1)}%`} good={margin.marginPct > 30} warn={margin.marginPct <= 0} />
+          <InsightRow label="Ganancia total" value={`$${fmt(margin.marginPerUnit * m.effectiveUnits)}`} good={margin.marginPerUnit > 0} warn={margin.marginPerUnit <= 0} />
+          <InsightRow label="ROI" value={`${fmt((margin.marginPerUnit * m.effectiveUnits) / m.totalInvested * 100, 1)}%`} good={margin.marginPerUnit > 0} warn={margin.marginPerUnit <= 0} />
+        </>
+      )}
     </div>
   )
 }
 
 function ProductCard({ product, bestCpu, onEdit, onDelete }) {
+  const originalQty = parseFloat(product.quantity) || 0
+  const [qty, setQty] = useState(originalQty)
+
+  useEffect(() => {
+    setQty(parseFloat(product.quantity) || 0)
+  }, [product.quantity])
+
   const showAir = hasMode(product, "air")
   const showSea = hasMode(product, "sea")
-  const mAir = showAir ? calcMetrics(product, "air") : null
-  const mSea = showSea ? calcMetrics(product, "sea") : null
-  const lossImpact = calcMetrics(product, "air").lossImpact
-  const effectiveUnits = calcMetrics(product, "air").effectiveUnits
+  const loss = parseFloat(product.lossPercent) || 0
+  const effectiveUnits = qty * (1 - loss / 100)
+  const lossImpact = (qty - effectiveUnits) * (parseFloat(product.wholesalePrice) || 0)
+  const sliderMin = Math.max(1, Math.round(originalQty * 0.1))
+  const sliderMax = Math.max(originalQty * 3, 10)
 
   return (
     <Card className="flex flex-col overflow-hidden">
@@ -234,28 +261,65 @@ function ProductCard({ product, bestCpu, onEdit, onDelete }) {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
           <span className="text-muted-foreground">Precio mayorista</span>
           <span className="font-medium text-right">${fmt(parseFloat(product.wholesalePrice) || 0)}/u</span>
-          <span className="text-muted-foreground">Cantidad</span>
-          <span className="font-medium text-right">{fmt(parseFloat(product.quantity) || 0, 0)} u</span>
+          {product.retailPrice && (
+            <>
+              <span className="text-muted-foreground">Precio de venta</span>
+              <span className="font-medium text-right">${fmt(parseFloat(product.retailPrice))}/u</span>
+            </>
+          )}
           <span className="text-muted-foreground">Peso</span>
           <span className="font-medium text-right">{fmt(parseFloat(product.weight) || 0)} kg</span>
           <span className="text-muted-foreground">Merma / Dev.</span>
           <span className="font-medium text-right">{product.lossPercent || 0}%</span>
-          <span className="text-muted-foreground">U. efectivas</span>
-          <span className="font-medium text-right">{fmt(effectiveUnits, 0)} u</span>
-          {lossImpact > 0 && (
-            <>
-              <span className="text-muted-foreground">Pérdida por merma</span>
-              <span className="font-medium text-right text-amber-600">${fmt(lossImpact)}</span>
-            </>
-          )}
         </div>
+
+        {/* Slider de cantidad */}
+        {originalQty > 0 && (
+          <div className="space-y-2 border rounded-lg p-3 bg-muted/40">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground font-medium">Cantidad simulada</span>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold tabular-nums">{Math.round(qty)} u</span>
+                {Math.round(qty) !== originalQty && (
+                  <button onClick={() => setQty(originalQty)} className="text-xs text-muted-foreground underline hover:text-foreground">
+                    reset
+                  </button>
+                )}
+              </div>
+            </div>
+            <input
+              type="range"
+              min={sliderMin}
+              max={sliderMax}
+              step={Math.max(1, Math.round(originalQty * 0.01))}
+              value={qty}
+              onChange={(e) => setQty(Number(e.target.value))}
+              className="w-full accent-foreground"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{sliderMin} u</span>
+              <span className="text-muted-foreground/60">base: {originalQty} u</span>
+              <span>{sliderMax} u</span>
+            </div>
+            <div className="flex justify-between text-xs pt-0.5">
+              <span className="text-muted-foreground">U. efectivas</span>
+              <span className="font-medium">{fmt(effectiveUnits, 0)} u</span>
+            </div>
+            {lossImpact > 0 && (
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">Pérdida por merma</span>
+                <span className="font-medium text-amber-600">${fmt(lossImpact)}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Insights por modalidad */}
         {(showAir || showSea) && (
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Por modalidad de envío</p>
-            {showAir && <ShippingInsights product={product} mode="air" bestCpu={bestCpu} />}
-            {showSea && <ShippingInsights product={product} mode="sea" bestCpu={bestCpu} />}
+            {showAir && <ShippingInsights product={product} mode="air" bestCpu={bestCpu} qty={qty} />}
+            {showSea && <ShippingInsights product={product} mode="sea" bestCpu={bestCpu} qty={qty} />}
           </div>
         )}
 
@@ -272,19 +336,20 @@ function ProductCard({ product, bestCpu, onEdit, onDelete }) {
 function ComparisonPanel({ products }) {
   if (products.length < 2) return null
 
-  // Build rows: one per (product × mode) combination
   const rows = []
   for (const p of products) {
     for (const mode of ["air", "sea"]) {
       if (!hasMode(p, mode)) continue
       const m = calcMetrics(p, mode)
-      rows.push({ name: p.name, mode, ...m })
+      const margin = calcMargin(m.costPerUnit, p.retailPrice)
+      rows.push({ name: p.name, mode, ...m, margin })
     }
   }
   if (rows.length < 2) return null
 
   const minCpu = Math.min(...rows.filter((r) => r.costPerUnit > 0).map((r) => r.costPerUnit))
   const maxCpu = Math.max(...rows.map((r) => r.costPerUnit))
+  const hasMargins = rows.some((r) => r.margin)
 
   const ModeIcon = ({ mode }) =>
     mode === "air"
@@ -303,18 +368,24 @@ function ComparisonPanel({ products }) {
               <th className="text-left pb-2 font-medium text-muted-foreground px-3">Envío</th>
               <th className="text-right pb-2 font-medium text-muted-foreground px-3">Total invertido</th>
               <th className="text-right pb-2 font-medium text-muted-foreground px-3">U. efectivas</th>
-              <th className="text-right pb-2 font-medium text-muted-foreground px-3">Costo/u efectiva</th>
-              <th className="text-right pb-2 font-medium text-muted-foreground pl-3">% Envío</th>
+              <th className="text-right pb-2 font-medium text-muted-foreground px-3">Costo/u</th>
+              {hasMargins && <>
+                <th className="text-right pb-2 font-medium text-muted-foreground px-3">Margen %</th>
+                <th className="text-right pb-2 font-medium text-muted-foreground px-3">Ganancia total</th>
+                <th className="text-right pb-2 font-medium text-muted-foreground pl-3">ROI</th>
+              </>}
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => {
               const isBest = r.costPerUnit > 0 && r.costPerUnit === minCpu
+              const profit = r.margin ? r.margin.marginPerUnit * r.effectiveUnits : null
+              const roi = r.margin && r.totalInvested > 0 ? (profit / r.totalInvested) * 100 : null
               return (
                 <tr key={i} className={`border-b last:border-0 ${isBest ? "bg-green-50" : ""}`}>
                   <td className="py-2 font-medium pr-4">
                     {r.name}
-                    {isBest && <span className="ml-2 text-xs text-green-700 font-normal">★ mejor</span>}
+                    {isBest && <span className="ml-2 text-xs text-green-700 font-normal">★ menor costo</span>}
                   </td>
                   <td className="py-2 px-3 whitespace-nowrap">
                     <ModeIcon mode={r.mode} />
@@ -323,7 +394,17 @@ function ComparisonPanel({ products }) {
                   <td className="py-2 text-right px-3">${fmt(r.totalInvested)}</td>
                   <td className="py-2 text-right px-3">{fmt(r.effectiveUnits, 0)}</td>
                   <td className={`py-2 text-right px-3 font-semibold ${isBest ? "text-green-700" : ""}`}>${fmt(r.costPerUnit)}</td>
-                  <td className={`py-2 text-right pl-3 ${r.shippingShare > 40 ? "text-amber-600" : ""}`}>{fmt(r.shippingShare, 1)}%</td>
+                  {hasMargins && <>
+                    <td className={`py-2 text-right px-3 ${r.margin ? (r.margin.marginPct > 30 ? "text-green-700 font-semibold" : r.margin.marginPct <= 0 ? "text-red-600" : "") : "text-muted-foreground"}`}>
+                      {r.margin ? `${fmt(r.margin.marginPct, 1)}%` : "—"}
+                    </td>
+                    <td className={`py-2 text-right px-3 ${profit !== null ? (profit > 0 ? "text-green-700 font-semibold" : "text-red-600") : "text-muted-foreground"}`}>
+                      {profit !== null ? `$${fmt(profit)}` : "—"}
+                    </td>
+                    <td className={`py-2 text-right pl-3 ${roi !== null ? (roi > 0 ? "text-green-700 font-semibold" : "text-red-600") : "text-muted-foreground"}`}>
+                      {roi !== null ? `${fmt(roi, 1)}%` : "—"}
+                    </td>
+                  </>}
                 </tr>
               )
             })}
