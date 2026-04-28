@@ -1,4 +1,6 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore"
+import { db } from "./lib/firebase"
 import { Plus, Pencil, Trash2, ExternalLink, Package, Award, Plane, Ship } from "lucide-react"
 import { Button } from "./components/ui/button"
 import { Card, CardHeader, CardTitle, CardContent } from "./components/ui/card"
@@ -356,24 +358,31 @@ function ComparisonPanel({ products }) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-let nextId = 1
-
 export default function App() {
   const [products, setProducts] = useState([])
+  const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
 
-  // Best cpu across all products × modes (for badge on cards)
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "products"), (snap) => {
+      setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      setLoading(false)
+    })
+    return unsub
+  }, [])
+
   const allCpus = products.flatMap((p) =>
     ["air", "sea"].filter((m) => hasMode(p, m)).map((m) => calcMetrics(p, m).costPerUnit).filter((c) => c > 0)
   )
   const bestCpu = allCpus.length > 1 ? Math.min(...allCpus) : null
 
-  function handleSave(form) {
+  async function handleSave(form) {
+    const { id, ...data } = form
     if (editingProduct) {
-      setProducts((ps) => ps.map((p) => (p.id === editingProduct.id ? { ...form, id: p.id } : p)))
+      await updateDoc(doc(db, "products", editingProduct.id), data)
     } else {
-      setProducts((ps) => [...ps, { ...form, id: nextId++ }])
+      await addDoc(collection(db, "products"), data)
     }
     setDialogOpen(false)
     setEditingProduct(null)
@@ -418,7 +427,13 @@ export default function App() {
           </Dialog>
         </div>
 
-        {products.length === 0 && (
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <p className="text-muted-foreground text-sm">Cargando productos...</p>
+          </div>
+        )}
+
+        {!loading && products.length === 0 && (
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <Package className="h-12 w-12 text-muted-foreground/30 mb-4" />
             <p className="text-muted-foreground">Todavía no hay productos.</p>
@@ -426,7 +441,7 @@ export default function App() {
           </div>
         )}
 
-        {products.length > 0 && (
+        {!loading && products.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {products.map((p) => (
               <ProductCard
@@ -434,7 +449,7 @@ export default function App() {
                 product={p}
                 bestCpu={bestCpu}
                 onEdit={() => { setEditingProduct(p); setDialogOpen(true) }}
-                onDelete={() => setProducts((ps) => ps.filter((x) => x.id !== p.id))}
+                onDelete={() => deleteDoc(doc(db, "products", p.id))}
               />
             ))}
           </div>
